@@ -16,6 +16,7 @@ const Home: React.FC = () => {
   const [isJoining, setIsJoining] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [createdSessionCode, setCreatedSessionCode] = useState<string | null>(null);
   
   const [name, setName] = useState('');
   const [playlistUrls, setPlaylistUrls] = useState<string[]>(['']);
@@ -72,15 +73,13 @@ const Home: React.FC = () => {
     setPlaylistUrls(newUrls);
   };
 
-  const handleCreate = async (e: React.FormEvent) => {
+  const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    const filteredUrls = playlistUrls.filter(url => url.trim() !== '');
-    if (filteredUrls.length === 0) {
-      toast.error('Voeg minimaal één playlist URL toe');
-      setLoading(false);
+    if (!name.trim()) {
+      toast.error('Vul je naam in');
       return;
     }
+    setLoading(true);
 
     try {
       // 1. Create Room
@@ -94,28 +93,57 @@ const Home: React.FC = () => {
         name: name
       });
 
-      // 3. Upload Playlists (one by one for better error handling/feedback)
-      for (const url of filteredUrls) {
-        await api.post('/rooms/playlist', {
-          code: roomCode,
-          player_id: getPlayerId(),
-          url: url
-        });
-      }
-
       localStorage.setItem(`host_${roomCode}`, 'true');
       
       saveRecentSession({
         id: roomCode,
         name: name,
-        playlistUrls: filteredUrls,
+        playlistUrls: [],
         isHost: true
       });
       
-      toast.success('Sessie aangemaakt!');
-      navigate(`/lobby/${roomCode}`);
+      setCreatedSessionCode(roomCode);
+      toast.success('Sessie aangemaakt! Voeg nu playlists toe.');
     } catch (err: any) {
       toast.error(err.response?.data?.detail || 'Fout bij het aanmaken van de sessie');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoToLobby = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!createdSessionCode) return;
+
+    const filteredUrls = playlistUrls.filter(url => url.trim() !== '');
+    if (filteredUrls.length === 0) {
+      toast.error('Voeg minimaal één playlist URL toe');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // Upload Playlists
+      for (const url of filteredUrls) {
+        await api.post('/rooms/playlist', {
+          code: createdSessionCode,
+          player_id: getPlayerId(),
+          url: url
+        });
+      }
+      
+      // Update recent sessions with the playlists
+      saveRecentSession({
+        id: createdSessionCode,
+        name: name,
+        playlistUrls: filteredUrls,
+        isHost: true
+      });
+
+      toast.success('Klaar om te spelen!');
+      navigate(`/lobby/${createdSessionCode}`);
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || 'Fout bij het toevoegen van playlists');
     } finally {
       setLoading(false);
     }
@@ -279,55 +307,72 @@ const Home: React.FC = () => {
       ) : (
         <div className="bg-slate-800 p-8 rounded-3xl shadow-2xl border border-slate-700 space-y-6 text-left animate-in fade-in zoom-in duration-300">
           <h2 className="text-2xl font-black italic text-indigo-400 uppercase tracking-tight">
-            {isCreating ? 'Nieuwe Sessie' : `Join ${sessionIdInput}`}
+            {isJoining ? `Join ${sessionIdInput}` : (createdSessionCode ? 'Playlists Toevoegen' : 'Nieuwe Sessie')}
           </h2>
+
+          {isCreating && createdSessionCode && (
+            <div className="text-center py-4 bg-slate-900/50 rounded-2xl border-2 border-indigo-500/30">
+               <span className="text-slate-400 text-[10px] font-black uppercase tracking-widest block mb-1">Jouw Lobby Code</span>
+               <span className="text-3xl font-black text-white tracking-[0.2em]">{createdSessionCode}</span>
+            </div>
+          )}
           
-          <form onSubmit={isCreating ? handleCreate : handleJoin} className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-widest ml-1">Je Naam</label>
-              <input 
-                required
-                type="text" 
-                placeholder="Bijv. Svend" 
-                className="w-full bg-slate-900 border-2 border-slate-700 rounded-2xl p-4 font-bold focus:border-indigo-500 outline-none transition-all"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </div>
+          <form 
+            onSubmit={
+              isJoining ? handleJoin : 
+              (createdSessionCode ? handleGoToLobby : handleCreateRoom)
+            } 
+            className="space-y-4"
+          >
+            {(!createdSessionCode || isJoining) && (
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest ml-1">Je Naam</label>
+                <input 
+                  required
+                  type="text" 
+                  placeholder="Bijv. Svend" 
+                  className="w-full bg-slate-900 border-2 border-slate-700 rounded-2xl p-4 font-bold focus:border-indigo-500 outline-none transition-all"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+            )}
             
-            <div className="space-y-3">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-widest ml-1">Spotify Playlists (Publiek)</label>
-              
-              {playlistUrls.map((url, index) => (
-                <div key={index} className="flex gap-2">
-                  <input 
-                    required
-                    type="url" 
-                    placeholder="https://open.spotify.com/playlist/..." 
-                    className="flex-1 bg-slate-900 border-2 border-slate-700 rounded-2xl p-3 font-bold focus:border-indigo-500 outline-none transition-all text-xs"
-                    value={url}
-                    onChange={(e) => updatePlaylistUrl(index, e.target.value)}
-                  />
-                  {playlistUrls.length > 1 && (
-                    <button 
-                      type="button"
-                      onClick={() => removePlaylistField(index)}
-                      className="bg-red-500/10 text-red-500 p-3 rounded-2xl border border-red-500/20 hover:bg-red-500/20 transition-all"
-                    >
-                      <X size={18} />
-                    </button>
-                  )}
-                </div>
-              ))}
-              
-              <button 
-                type="button"
-                onClick={addPlaylistField}
-                className="w-full py-2 border-2 border-dashed border-slate-700 rounded-2xl text-slate-500 font-bold text-xs hover:border-indigo-500 hover:text-indigo-500 transition-all flex items-center justify-center gap-2"
-              >
-                <Plus size={14} /> Playlist Toevoegen
-              </button>
-            </div>
+            {(isJoining || createdSessionCode) && (
+              <div className="space-y-3">
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest ml-1">Spotify Playlists (Publiek)</label>
+                
+                {playlistUrls.map((url, index) => (
+                  <div key={index} className="flex gap-2">
+                    <input 
+                      required
+                      type="url" 
+                      placeholder="https://open.spotify.com/playlist/..." 
+                      className="flex-1 bg-slate-900 border-2 border-slate-700 rounded-2xl p-3 font-bold focus:border-indigo-500 outline-none transition-all text-xs"
+                      value={url}
+                      onChange={(e) => updatePlaylistUrl(index, e.target.value)}
+                    />
+                    {playlistUrls.length > 1 && (
+                      <button 
+                        type="button"
+                        onClick={() => removePlaylistField(index)}
+                        className="bg-red-500/10 text-red-500 p-3 rounded-2xl border border-red-500/20 hover:bg-red-500/20 transition-all"
+                      >
+                        <X size={18} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                
+                <button 
+                  type="button"
+                  onClick={addPlaylistField}
+                  className="w-full py-2 border-2 border-dashed border-slate-700 rounded-2xl text-slate-500 font-bold text-xs hover:border-indigo-500 hover:text-indigo-500 transition-all flex items-center justify-center gap-2"
+                >
+                  <Plus size={14} /> Playlist Toevoegen
+                </button>
+              </div>
+            )}
 
             <div className="pt-2 space-y-3">
               <button 
@@ -335,16 +380,22 @@ const Home: React.FC = () => {
                 disabled={loading}
                 className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-black py-4 rounded-2xl text-xl shadow-lg shadow-indigo-600/20 transition-all uppercase flex items-center justify-center gap-2"
               >
-                {loading ? <span className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></span> : (isCreating ? 'Sessie Starten' : 'Joinen')}
+                {loading ? (
+                  <span className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                ) : (
+                  isJoining ? 'Joinen' : (createdSessionCode ? 'Naar Lobby' : 'Sessie Aanmaken')
+                )}
               </button>
               
-              <button 
-                type="button"
-                onClick={() => { setIsJoining(false); setIsCreating(false); }}
-                className="w-full bg-transparent border-2 border-slate-700 hover:bg-slate-700 text-slate-400 font-bold py-3 rounded-2xl transition-all uppercase text-sm"
-              >
-                Terug
-              </button>
+              {!createdSessionCode && (
+                <button 
+                  type="button"
+                  onClick={() => { setIsJoining(false); setIsCreating(false); }}
+                  className="w-full bg-transparent border-2 border-slate-700 hover:bg-slate-700 text-slate-400 font-bold py-3 rounded-2xl transition-all uppercase text-sm"
+                >
+                  Terug
+                </button>
+              )}
             </div>
           </form>
         </div>
